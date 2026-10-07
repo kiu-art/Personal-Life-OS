@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from typing import Optional
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
 from app.models.user_state import UserStateVector
@@ -50,21 +49,10 @@ class StateEngine:
 
     async def infer_and_store_state(self, transcript: str) -> UserStateVector:
         now = datetime.now(timezone.utc)
-        try:
-            result: UserStateVector = await self.chain.ainvoke({
-                "current_time": now.strftime("%Y-%m-%d %H:%M UTC"),
-                "transcript": transcript,
-            })
-        except Exception as e:
-            result = UserStateVector(
-                physical_alertness=7,
-                cognitive_clarity=8,
-                drive_vs_friction=8,
-                operating_mode="deep_flow",
-                trigger_evidence=[transcript],
-                coaching_summary=f"Processed voice check-in: '{transcript}'",
-                timestamp=now,
-            )
+        result: UserStateVector = await self.chain.ainvoke({
+            "current_time": now.strftime("%Y-%m-%d %H:%M UTC"),
+            "transcript": transcript,
+        })
 
         # Save state snapshot in MongoDB time-series collection
         db = get_database()

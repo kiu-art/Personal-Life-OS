@@ -13,7 +13,7 @@ from app.models.observation import RawObservation
 from app.models.task import Task
 from app.services.state_extractor import state_engine
 from app.models.disruption import VoiceDisruptionIntent
-from app.routers.schedule import dynamic_replan_day, ReplanRequest, shift_schedule, ScheduleShiftRequest
+from app.routers.schedule import dynamic_replan_day, ReplanRequest
 from app.core.user_profile import USER_LIFE_PROFILE
 
 router = APIRouter(prefix="/api/observations", tags=["observations"])
@@ -287,7 +287,6 @@ async def process_observation_background(obs_id: str, raw_obs: RawObservation):
 
 # --- Endpoints ---
 
-@router.post("/")
 @router.post("/raw")
 async def ingest_raw_observation(
     payload: ObservationCreateRequest,
@@ -335,31 +334,17 @@ async def record_voice_checkin(payload: VoiceCheckInRequest):
     state = await state_engine.infer_and_store_state(payload.transcript)
 
     # 2. Check for schedule disruptions
-    try:
-        llm = ChatOllama(
-            model="qwen2.5:7b",
-            base_url="http://127.0.0.1:11434",
-            temperature=0.1,
-            num_ctx=2048,
-        )
-        disruption_chain = DISRUPTION_PROMPT | llm.with_structured_output(VoiceDisruptionIntent, method="json_schema")
-        disruption: VoiceDisruptionIntent = await disruption_chain.ainvoke({
-            "transcript": payload.transcript
-        })
-    except Exception:
-        # Heuristic disruption recognition for English, Hindi, Marathi, Hinglish
-        text_lower = payload.transcript.lower()
-        is_disruption = any(w in text_lower for w in [
-            "late", "delay", "postpone", "traffic", "shift", "thoda late", "woke up late",
-            "der ho gayi", "ushir", "reschedule", "uthne me late", "woke up"
-        ])
-        disruption = VoiceDisruptionIntent(
-            is_schedule_disruption=is_disruption,
-            disruption_type="overslept" if ("late" in text_lower or "woke" in text_lower) else "general_pivot",
-            missed_event_description=payload.transcript if is_disruption else None,
-            severity="moderate",
-            suggested_action="Shift downstream schedule forward",
-        )
+    llm = ChatOllama(
+        model="qwen2.5:7b",
+        base_url="http://127.0.0.1:11434",
+        temperature=0.1,
+        num_ctx=2048,
+    )
+    disruption_chain = DISRUPTION_PROMPT | llm.with_structured_output(VoiceDisruptionIntent, method="json_schema")
+    
+    disruption: VoiceDisruptionIntent = await disruption_chain.ainvoke({
+        "transcript": payload.transcript
+    })
 
     replan_result = None
 
@@ -367,13 +352,16 @@ async def record_voice_checkin(payload: VoiceCheckInRequest):
     if disruption.is_schedule_disruption:
         print(f"[DISRUPTION DETECTED] {disruption.disruption_type}: {disruption.missed_event_description}. Auto-replanning...")
         
-        # Shift downstream tasks in MongoDB by 40 minutes and update summary
-        shift_res = await shift_schedule(ScheduleShiftRequest(
-            delta_minutes=40,
-            reason=payload.transcript,
-        ))
-
-        replan_result = shift_res
+        replan_req = ReplanRequest(
+            current_time=current_time_str,
+            situation_note=(
+                f"Voice note reported disruption ({disruption.disruption_type}): "
+                f"{disruption.missed_event_description or payload.transcript}. "
+                f"Cognitive Mode: {state.operating_mode}."
+            ),
+            hard_stop_bedtime="23:30",
+        )
+        replan_result = await dynamic_replan_day(replan_req)
 
     # 4. Save raw observation
     await db.raw_observations.insert_one({
