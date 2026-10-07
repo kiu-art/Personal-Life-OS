@@ -15,11 +15,11 @@ class Settings(BaseSettings):
     BACKEND_PORT: int = 8000
 
     # MongoDB Atlas
-    MONGO_URI: str
+    MONGO_URI: str = "mongodb://localhost:27017"
     DB_NAME: str = "personal_life_os"
 
     # AI & LangChain
-    GEMINI_API_KEY: str
+    GEMINI_API_KEY: str = ""
 
     # Gmail Worker
     GMAIL_USER: str = ""
